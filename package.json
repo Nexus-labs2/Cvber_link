@@ -1,0 +1,10 @@
+{
+  "name": "cyberpunk-walkie-root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "cd server && npm start",
+    "dev": "cd server && npm run dev",
+    "install:server": "cd server && npm install"
+  }
+}

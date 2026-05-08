@@ -1,0 +1,1598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CYBERLINK-7 // ENCRYPTED AUDIO RELAY</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+<style>
+/* ══════════════════════════════════════════
+   ROOT VARIABLES & RESET
+══════════════════════════════════════════ */
+:root {
+  --cyan:    #00f5ff;
+  --cyan2:   #00bcd4;
+  --green:   #39ff14;
+  --amber:   #ffb300;
+  --red:     #ff1744;
+  --pink:    #ff006e;
+  --purple:  #9d4edd;
+  --bg:      #020408;
+  --bg1:     #050d14;
+  --bg2:     #071020;
+  --panel:   rgba(0,245,255,0.04);
+  --border:  rgba(0,245,255,0.2);
+  --border2: rgba(0,245,255,0.08);
+  --glow:    0 0 20px rgba(0,245,255,0.4);
+  --glow2:   0 0 40px rgba(0,245,255,0.2);
+  --font-hud: 'Orbitron', monospace;
+  --font-mono: 'Share Tech Mono', monospace;
+  --font-ui:   'Rajdhani', sans-serif;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--cyan); cursor: none; }
+
+/* ══════════════════════════════════════════
+   CUSTOM CURSOR
+══════════════════════════════════════════ */
+#cursor { position: fixed; width: 20px; height: 20px; pointer-events: none; z-index: 9999; transform: translate(-50%,-50%); }
+#cursor::before {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 4px; height: 4px;
+  background: var(--cyan);
+  border-radius: 50%;
+  transform: translate(-50%,-50%);
+  box-shadow: 0 0 8px var(--cyan);
+}
+#cursor::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 20px; height: 20px;
+  border: 1px solid rgba(0,245,255,0.6);
+  transform: translate(-50%,-50%) rotate(45deg);
+  animation: cursorSpin 3s linear infinite;
+}
+@keyframes cursorSpin { to { transform: translate(-50%,-50%) rotate(405deg); } }
+
+/* ══════════════════════════════════════════
+   PARTICLE CANVAS & SCANLINES
+══════════════════════════════════════════ */
+#particleCanvas { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+.scanlines {
+  position: fixed; inset: 0; z-index: 1; pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.15) 2px,
+    rgba(0,0,0,0.15) 4px
+  );
+}
+.vignette {
+  position: fixed; inset: 0; z-index: 2; pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.8) 100%);
+}
+
+/* ══════════════════════════════════════════
+   LAYOUT GRID
+══════════════════════════════════════════ */
+#app {
+  position: relative; z-index: 10;
+  width: 100vw; height: 100vh;
+  display: grid;
+  grid-template-rows: 60px 1fr 1fr 44px;
+  grid-template-columns: 280px 1fr 280px;
+  gap: 6px;
+  padding: 6px;
+  grid-template-areas:
+    "header  header  header"
+    "left    center  right"
+    "left2   bottom  right2"
+    "footer  footer  footer";
+}
+
+/* ══════════════════════════════════════════
+   PANELS
+══════════════════════════════════════════ */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  position: relative;
+  overflow: hidden;
+  backdrop-filter: blur(4px);
+}
+.panel::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+  opacity: 0.6;
+}
+.panel-title {
+  font-family: var(--font-hud);
+  font-size: 9px;
+  letter-spacing: 3px;
+  color: rgba(0,245,255,0.5);
+  padding: 8px 12px 4px;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.panel-title::before {
+  content: '';
+  width: 6px; height: 6px;
+  background: var(--cyan);
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.8)} }
+
+/* ══════════════════════════════════════════
+   HEADER
+══════════════════════════════════════════ */
+#header {
+  grid-area: header;
+  background: linear-gradient(180deg, rgba(0,245,255,0.08) 0%, transparent 100%);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  position: relative;
+  overflow: visible;
+}
+.logo-block { display: flex; flex-direction: column; }
+.logo-main {
+  font-family: var(--font-hud);
+  font-size: 18px;
+  font-weight: 900;
+  color: var(--cyan);
+  text-shadow: var(--glow);
+  letter-spacing: 6px;
+  animation: glitch 8s infinite;
+}
+@keyframes glitch {
+  0%,95%,100%{text-shadow:0 0 20px var(--cyan),0 0 40px var(--cyan)}
+  96%{text-shadow:-2px 0 var(--pink),2px 0 var(--green),0 0 20px var(--cyan);clip-path:polygon(0 20%,100% 20%,100% 40%,0 40%)}
+  97%{text-shadow:2px 0 var(--pink),-2px 0 var(--green),0 0 20px var(--cyan)}
+  98%{text-shadow:-1px 0 var(--pink),1px 0 var(--green),0 0 20px var(--cyan);clip-path:polygon(0 60%,100% 60%,100% 80%,0 80%)}
+}
+.logo-sub {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: rgba(0,245,255,0.4);
+  letter-spacing: 4px;
+}
+.header-center {
+  display: flex;
+  gap: 30px;
+  align-items: center;
+}
+.hud-stat {
+  display: flex; flex-direction: column; align-items: center;
+}
+.hud-val {
+  font-family: var(--font-hud);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--cyan);
+  text-shadow: 0 0 10px var(--cyan);
+}
+.hud-label {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 2px;
+  color: rgba(0,245,255,0.4);
+}
+.header-right { display: flex; gap: 12px; align-items: center; }
+.status-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 4px 12px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  letter-spacing: 2px;
+  display: flex; align-items: center; gap: 6px;
+}
+.status-pill .dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.status-pill.online  { color: var(--green); box-shadow: 0 0 10px rgba(57,255,20,0.3); }
+.status-pill.offline { color: var(--red);   box-shadow: 0 0 10px rgba(255,23,68,0.2); }
+.status-pill.online .dot { animation: blink 1s ease-in-out infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+/* ══════════════════════════════════════════
+   LEFT COLUMN
+══════════════════════════════════════════ */
+#left  { grid-area: left;  display: flex; flex-direction: column; gap: 6px; }
+#left2 { grid-area: left2; }
+
+/* ─── Node Topology ─── */
+#topology-panel { flex: 1; }
+#topologyCanvas { width: 100%; display: block; }
+
+/* ─── Signal Meter ─── */
+#signal-panel { height: 100px; }
+.signal-bars {
+  display: flex;
+  gap: 3px;
+  align-items: flex-end;
+  height: 60px;
+  padding: 8px 12px;
+}
+.signal-bar {
+  flex: 1;
+  background: var(--cyan);
+  opacity: 0.3;
+  border-radius: 1px 1px 0 0;
+  transition: height 0.15s ease, opacity 0.15s ease;
+  box-shadow: 0 0 6px var(--cyan);
+}
+.signal-bar.active { opacity: 1; }
+
+/* ─── Device List ─── */
+#devices-panel { height: 130px; overflow-y: auto; }
+.device-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.device-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.device-dot.tx { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+.device-dot.rx { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.device-dot.dash { background: var(--purple); box-shadow: 0 0 6px var(--purple); }
+.device-name { color: rgba(0,245,255,0.8); flex: 1; }
+.device-role { color: rgba(0,245,255,0.3); font-size: 9px; }
+
+/* ══════════════════════════════════════════
+   CENTER COLUMN
+══════════════════════════════════════════ */
+#center  { grid-area: center; position: relative; overflow: hidden; }
+#bottom  { grid-area: bottom; display: flex; gap: 6px; }
+
+/* ─── Main Waveform ─── */
+#waveformCanvas { width: 100%; height: 100%; display: block; }
+.center-overlay {
+  position: absolute;
+  top: 8px; left: 12px;
+  font-family: var(--font-hud);
+  font-size: 8px;
+  letter-spacing: 3px;
+  color: rgba(0,245,255,0.3);
+}
+.freq-label {
+  position: absolute;
+  bottom: 8px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: rgba(0,245,255,0.2);
+}
+
+/* ─── Spectrum ─── */
+#spectrum-panel { flex: 2; }
+#spectrumCanvas { width: 100%; height: 100%; display: block; }
+
+/* ─── Radar ─── */
+#radar-panel { width: 200px; flex-shrink: 0; position: relative; }
+#radarCanvas  { width: 100%; height: 100%; display: block; }
+
+/* ─── Packet Graph ─── */
+#packets-panel { flex: 1; }
+#packetCanvas  { width: 100%; height: 100%; display: block; }
+
+/* ══════════════════════════════════════════
+   RIGHT COLUMN
+══════════════════════════════════════════ */
+#right  { grid-area: right;  display: flex; flex-direction: column; gap: 6px; }
+#right2 { grid-area: right2; display: flex; flex-direction: column; gap: 6px; }
+
+/* ─── Encryption Status ─── */
+#crypto-panel { height: 160px; padding: 8px 12px; }
+.crypto-key {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: rgba(57,255,20,0.7);
+  letter-spacing: 1px;
+  line-height: 1.8;
+  word-break: break-all;
+}
+.crypto-field {
+  display: flex; gap: 8px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.crypto-label {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: rgba(0,245,255,0.3);
+  width: 28px;
+  flex-shrink: 0;
+}
+.crypto-val {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--green);
+  text-shadow: 0 0 6px var(--green);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crypto-status {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 8px;
+}
+.lock-icon {
+  font-size: 14px;
+  animation: lockPulse 3s ease-in-out infinite;
+}
+@keyframes lockPulse {
+  0%,100%{filter:drop-shadow(0 0 4px var(--green))}
+  50%{filter:drop-shadow(0 0 12px var(--green))}
+}
+
+/* ─── EQ Bars ─── */
+#eq-panel { flex: 1; overflow: hidden; }
+#eqCanvas  { width: 100%; height: 100%; display: block; }
+
+/* ─── VAD ─── */
+#vad-panel { height: 80px; display: flex; flex-direction: column; }
+.vad-meter {
+  flex: 1;
+  margin: 6px 12px;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border2);
+  border-radius: 2px;
+  position: relative;
+  overflow: hidden;
+}
+.vad-fill {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  background: linear-gradient(90deg, var(--green), var(--cyan), var(--amber));
+  width: 0%;
+  transition: width 0.05s ease;
+  box-shadow: 0 0 10px var(--cyan);
+}
+.vad-label {
+  position: absolute;
+  right: 6px; top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: rgba(0,245,255,0.5);
+}
+
+/* ─── Alert Log ─── */
+#alerts-panel { flex: 1; overflow-y: auto; }
+.alert-item {
+  display: flex;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border2);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  align-items: flex-start;
+}
+.alert-time { color: rgba(0,245,255,0.3); flex-shrink: 0; }
+.alert-msg  { color: rgba(0,245,255,0.7); }
+.alert-msg.warn { color: var(--amber); }
+.alert-msg.err  { color: var(--red); }
+.alert-msg.ok   { color: var(--green); }
+
+/* ──────────────────────────────
+   AUDIO CONTROLS (bottom right)
+────────────────────────────── */
+#audio-panel { flex: 1; display: flex; flex-direction: column; gap: 4px; padding: 6px 12px; }
+.audio-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.cyber-btn {
+  font-family: var(--font-hud);
+  font-size: 9px;
+  letter-spacing: 2px;
+  padding: 6px 14px;
+  background: transparent;
+  border: 1px solid var(--cyan);
+  color: var(--cyan);
+  cursor: none;
+  text-transform: uppercase;
+  transition: all 0.2s;
+  position: relative;
+  overflow: hidden;
+}
+.cyber-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--cyan);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.cyber-btn:hover { box-shadow: var(--glow); color: var(--bg); }
+.cyber-btn:hover::after { opacity: 1; }
+.cyber-btn span { position: relative; z-index: 1; }
+.cyber-btn:hover span { color: var(--bg); }
+.volume-wrap { display: flex; align-items: center; gap: 6px; flex: 1; }
+.vol-label { font-family: var(--font-mono); font-size: 9px; color: rgba(0,245,255,0.4); white-space: nowrap; }
+input[type=range] {
+  flex: 1;
+  -webkit-appearance: none;
+  height: 2px;
+  background: var(--border);
+  outline: none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px; height: 12px;
+  background: var(--cyan);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--cyan);
+  cursor: none;
+}
+
+/* ══════════════════════════════════════════
+   FOOTER
+══════════════════════════════════════════ */
+#footer {
+  grid-area: footer;
+  background: rgba(0,245,255,0.03);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 16px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: rgba(0,245,255,0.3);
+  letter-spacing: 2px;
+}
+.footer-sep { width: 1px; height: 20px; background: var(--border); }
+.footer-item { display: flex; gap: 6px; align-items: center; }
+.footer-item span { color: rgba(0,245,255,0.6); }
+#clock { color: var(--cyan); font-family: var(--font-hud); font-size: 11px; margin-left: auto; }
+
+/* ══════════════════════════════════════════
+   CORNER DECORATIONS
+══════════════════════════════════════════ */
+.panel .corner-tl,
+.panel .corner-br {
+  position: absolute;
+  width: 10px; height: 10px;
+  border-color: var(--cyan);
+  border-style: solid;
+  opacity: 0.5;
+}
+.panel .corner-tl { top: 0; left: 0; border-width: 1px 0 0 1px; }
+.panel .corner-br { bottom: 0; right: 0; border-width: 0 1px 1px 0; }
+
+/* ══════════════════════════════════════════
+   SCROLLBAR
+══════════════════════════════════════════ */
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<div id="cursor"></div>
+<canvas id="particleCanvas"></canvas>
+<div class="scanlines"></div>
+<div class="vignette"></div>
+
+<div id="app">
+
+  <!-- ═══ HEADER ═══ -->
+  <div id="header" class="panel">
+    <div class="corner-tl"></div>
+    <div class="corner-br"></div>
+    <div class="logo-block">
+      <div class="logo-main">CYBERLINK-7</div>
+      <div class="logo-sub">ENCRYPTED AUDIO RELAY // AES-128-CTR</div>
+    </div>
+    <div class="header-center">
+      <div class="hud-stat">
+        <div class="hud-val" id="hTxStatus">OFFLINE</div>
+        <div class="hud-label">TX STATUS</div>
+      </div>
+      <div style="width:1px;height:30px;background:var(--border)"></div>
+      <div class="hud-stat">
+        <div class="hud-val" id="hRxCount">0</div>
+        <div class="hud-label">RECEIVERS</div>
+      </div>
+      <div style="width:1px;height:30px;background:var(--border)"></div>
+      <div class="hud-stat">
+        <div class="hud-val" id="hPacketRate">0</div>
+        <div class="hud-label">PKT/SEC</div>
+      </div>
+      <div style="width:1px;height:30px;background:var(--border)"></div>
+      <div class="hud-stat">
+        <div class="hud-val" id="hPacketTotal">0</div>
+        <div class="hud-label">TOTAL PKTS</div>
+      </div>
+      <div style="width:1px;height:30px;background:var(--border)"></div>
+      <div class="hud-stat">
+        <div class="hud-val" id="hUptime">00:00</div>
+        <div class="hud-label">UPTIME</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="status-pill offline" id="wsStatusPill">
+        <div class="dot"></div>
+        <span>DISCONNECTED</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ LEFT ═══ -->
+  <div id="left">
+    <div class="panel" id="topology-panel" style="flex:1">
+      <div class="corner-tl"></div><div class="corner-br"></div>
+      <div class="panel-title">NETWORK TOPOLOGY</div>
+      <canvas id="topologyCanvas"></canvas>
+    </div>
+    <div class="panel" id="signal-panel">
+      <div class="corner-tl"></div><div class="corner-br"></div>
+      <div class="panel-title">SIGNAL STRENGTH</div>
+      <div class="signal-bars" id="signalBars"></div>
+    </div>
+  </div>
+
+  <!-- ═══ CENTER ═══ -->
+  <div id="center" class="panel">
+    <div class="corner-tl"></div><div class="corner-br"></div>
+    <div class="panel-title" style="position:absolute;top:0;left:0;right:0;z-index:2">LIVE AUDIO WAVEFORM // 8kHz PCM</div>
+    <canvas id="waveformCanvas"></canvas>
+  </div>
+
+  <!-- ═══ RIGHT ═══ -->
+  <div id="right">
+    <div class="panel" id="crypto-panel">
+      <div class="corner-tl"></div><div class="corner-br"></div>
+      <div class="panel-title">ENCRYPTION STATUS</div>
+      <div style="padding:4px 12px">
+        <div class="crypto-field">
+          <span class="crypto-label">ALGO</span>
+          <span class="crypto-val">AES-128-CTR</span>
+        </div>
+        <div class="crypto-field">
+          <span class="crypto-label">KEY</span>
+          <span class="crypto-val">DEADBEEF·CAFEBABE·133742···</span>
+        </div>
+        <div class="crypto-field">
+          <span class="crypto-label">IV</span>
+          <span class="crypto-val" id="liveIV">—— AWAITING ——</span>
+        </div>
+        <div class="crypto-field">
+          <span class="crypto-label">MODE</span>
+          <span class="crypto-val">STREAM · RAND-IV/PKT</span>
+        </div>
+        <div class="crypto-status">
+          <span class="lock-icon">🔒</span>
+          <span style="font-family:var(--font-mono);font-size:9px;color:var(--green)">CHANNEL SECURED</span>
+        </div>
+      </div>
+    </div>
+    <div class="panel" id="eq-panel">
+      <div class="corner-tl"></div><div class="corner-br"></div>
+      <div class="panel-title">EQUALIZER</div>
+      <canvas id="eqCanvas"></canvas>
+    </div>
+    <div class="panel" id="vad-panel">
+      <div class="corner-tl"></div><div class="corner-br"></div>
+      <div class="panel-title">VOICE ACTIVITY</div>
+      <div class="vad-meter">
+        <div class="vad-fill" id="vadFill"></div>
+        <div class="vad-label" id="vadLabel">SILENT</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ LEFT2 ═══ -->
+  <div id="left2" class="panel">
+    <div class="corner-tl"></div><div class="corner-br"></div>
+    <div class="panel-title">ACTIVE NODES</div>
+    <div id="deviceList" style="overflow-y:auto;height:calc(100% - 28px)"></div>
+  </div>
+
+  <!-- ═══ BOTTOM ═══ -->
+  <div id="bottom">
+    <div class="panel" id="spectrum-panel">
+      <div class="corner-tl"></div><div class="corner-br"></div>
+      <div class="panel-title">FFT SPECTRUM ANALYZER</div>
+      <canvas id="spectrumCanvas"></canvas>
+    </div>
+    <div class="panel" id="radar-panel">
+      <div class="corner-tl"></div><div class="corner-br"></div>
+      <div class="panel-title">RADAR</div>
+      <canvas id="radarCanvas"></canvas>
+    </div>
+    <div class="panel" id="packets-panel">
+      <div class="corner-tl"></div><div class="corner-br"></div>
+      <div class="panel-title">PACKET ANALYTICS</div>
+      <canvas id="packetCanvas"></canvas>
+    </div>
+  </div>
+
+  <!-- ═══ RIGHT2 ═══ -->
+  <div id="right2">
+    <div class="panel" id="audio-panel">
+      <div class="corner-tl"></div><div class="corner-br"></div>
+      <div class="panel-title">AUDIO PLAYBACK</div>
+      <div class="audio-controls">
+        <button class="cyber-btn" id="btnPlay" onclick="togglePlayback()"><span>▶ PLAY</span></button>
+        <button class="cyber-btn" onclick="decryptAndDownload()"><span>⬇ EXPORT</span></button>
+      </div>
+      <div class="volume-wrap" style="margin-top:6px">
+        <span class="vol-label">VOL</span>
+        <input type="range" id="volSlider" min="0" max="100" value="80" oninput="setVolume(this.value)">
+        <span class="vol-label" id="volVal">80%</span>
+      </div>
+    </div>
+    <div class="panel" id="alerts-panel" style="flex:1">
+      <div class="corner-tl"></div><div class="corner-br"></div>
+      <div class="panel-title">EVENT LOG</div>
+      <div id="alertLog" style="overflow-y:auto;height:calc(100% - 28px)"></div>
+    </div>
+  </div>
+
+  <!-- ═══ FOOTER ═══ -->
+  <div id="footer">
+    <div class="footer-item">SYS <span id="footerSys">NOMINAL</span></div>
+    <div class="footer-sep"></div>
+    <div class="footer-item">LATENCY <span id="footerLatency">—ms</span></div>
+    <div class="footer-sep"></div>
+    <div class="footer-item">CIPHER <span>AES-128-CTR</span></div>
+    <div class="footer-sep"></div>
+    <div class="footer-item">PROTOCOL <span>WS/SOCKET.IO</span></div>
+    <div class="footer-sep"></div>
+    <div class="footer-item">SERVER <span id="footerServer">—</span></div>
+    <div id="clock"></div>
+  </div>
+
+</div>
+
+<script>
+/* ══════════════════════════════════════════
+   CONFIG
+══════════════════════════════════════════ */
+const SERVER_URL = window.location.origin; // auto-detect
+const AES_KEY_HEX = 'DEADBEEFCAFEBABE133742 69ABCDEF01'.replace(/ /g,'');
+
+/* ══════════════════════════════════════════
+   CURSOR
+══════════════════════════════════════════ */
+const cursor = document.getElementById('cursor');
+document.addEventListener('mousemove', e => {
+  cursor.style.left = e.clientX + 'px';
+  cursor.style.top  = e.clientY + 'px';
+});
+
+/* ══════════════════════════════════════════
+   PARTICLES
+══════════════════════════════════════════ */
+(function() {
+  const canvas = document.getElementById('particleCanvas');
+  const ctx = canvas.getContext('2d');
+  let W, H, particles = [];
+
+  function resize() {
+    W = canvas.width  = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+
+  function spawnParticle() {
+    return {
+      x: Math.random() * W,
+      y: Math.random() * H,
+      vx: (Math.random() - 0.5) * 0.3,
+      vy: (Math.random() - 0.5) * 0.3,
+      life: 1,
+      decay: 0.002 + Math.random() * 0.003,
+      size: Math.random() * 1.5 + 0.5
+    };
+  }
+
+  resize();
+  window.addEventListener('resize', resize);
+  for (let i = 0; i < 120; i++) particles.push(spawnParticle());
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    // Draw connecting lines
+    for (let i = 0; i < particles.length; i++) {
+      for (let j = i + 1; j < particles.length; j++) {
+        const dx = particles[i].x - particles[j].x;
+        const dy = particles[i].y - particles[j].y;
+        const d  = Math.sqrt(dx*dx + dy*dy);
+        if (d < 100) {
+          ctx.strokeStyle = `rgba(0,245,255,${(1 - d/100) * 0.08})`;
+          ctx.lineWidth = 0.5;
+          ctx.beginPath();
+          ctx.moveTo(particles[i].x, particles[i].y);
+          ctx.lineTo(particles[j].x, particles[j].y);
+          ctx.stroke();
+        }
+      }
+    }
+    // Draw particles
+    particles.forEach((p, i) => {
+      p.x += p.vx; p.y += p.vy;
+      p.life -= p.decay;
+      if (p.life <= 0 || p.x < 0 || p.x > W || p.y < 0 || p.y > H) {
+        particles[i] = spawnParticle();
+      }
+      ctx.fillStyle = `rgba(0,245,255,${p.life * 0.5})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+      ctx.fill();
+    });
+    requestAnimationFrame(draw);
+  }
+  draw();
+})();
+
+/* ══════════════════════════════════════════
+   CLOCK
+══════════════════════════════════════════ */
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    now.toLocaleTimeString('en-US', {hour12:false}) + ' UTC';
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+/* ══════════════════════════════════════════
+   STATE
+══════════════════════════════════════════ */
+const state = {
+  wsConnected: false,
+  txOnline: false,
+  receiverCount: 0,
+  packetCount: 0,
+  packetRate: 0,
+  uptime: 0,
+  audioPlaying: false,
+  audioCtx: null,
+  gainNode: null,
+  volume: 0.8,
+  recentPacketSizes: new Array(100).fill(0),
+  recentPacketRates: new Array(100).fill(0),
+  signalLevel: 0,
+  latency: 0,
+  audioBuffer: [],
+  receivers: []
+};
+
+const SAMPLE_RATE = 8000;
+const BYTES_PER_SAMPLE = 2;
+
+/* ══════════════════════════════════════════
+   ALERT LOG
+══════════════════════════════════════════ */
+function addAlert(msg, type = '') {
+  const log = document.getElementById('alertLog');
+  const now = new Date().toLocaleTimeString('en-US', {hour12:false});
+  const el = document.createElement('div');
+  el.className = 'alert-item';
+  el.innerHTML = `<span class="alert-time">${now}</span><span class="alert-msg ${type}">${msg}</span>`;
+  log.insertBefore(el, log.firstChild);
+  while (log.children.length > 60) log.removeChild(log.lastChild);
+}
+
+/* ══════════════════════════════════════════
+   SOCKET.IO
+══════════════════════════════════════════ */
+const socket = io(SERVER_URL);
+
+socket.on('connect', () => {
+  state.wsConnected = true;
+  socket.emit('register', { role: 'dashboard', label: 'CYBERLINK-DASHBOARD' });
+  updateWsStatus(true);
+  addAlert('CONNECTED TO RELAY SERVER', 'ok');
+  document.getElementById('footerServer').textContent = SERVER_URL;
+});
+
+socket.on('disconnect', () => {
+  state.wsConnected = false;
+  updateWsStatus(false);
+  addAlert('RELAY SERVER DISCONNECTED', 'err');
+});
+
+socket.on('registered', (data) => {
+  addAlert(`REGISTERED AS ${data.role.toUpperCase()} // ID:${data.sessionId.slice(0,8)}`, 'ok');
+});
+
+socket.on('server_status', (s) => {
+  state.txOnline      = s.transmitterOnline;
+  state.receiverCount = s.receiverCount;
+  state.packetCount   = s.packetCount;
+  state.packetRate    = s.packetRate;
+  state.uptime        = s.uptime;
+  state.receivers     = s.receivers || [];
+  updateHUD();
+  updateDeviceList();
+});
+
+socket.on('transmitter_offline', () => {
+  addAlert('TRANSMITTER WENT OFFLINE', 'warn');
+});
+
+socket.on('packet_meta', (meta) => {
+  state.recentPacketSizes.shift();
+  state.recentPacketSizes.push(meta.size);
+  document.getElementById('liveIV').textContent =
+    Math.random().toString(16).slice(2,10).toUpperCase() +
+    '·' + Math.random().toString(16).slice(2,10).toUpperCase();
+});
+
+let lastPacketTime = 0;
+socket.on('audio_packet', (packet) => {
+  const now = performance.now();
+  state.latency = now - lastPacketTime;
+  lastPacketTime = now;
+  document.getElementById('footerLatency').textContent =
+    Math.round(state.latency) + 'ms';
+
+  // Push to audio buffer
+  const buf = packet instanceof ArrayBuffer ? packet :
+    (packet.buffer ? packet.buffer : null);
+  if (buf) {
+    state.audioBuffer.push(new Uint8Array(buf));
+    if (state.audioBuffer.length > 50) state.audioBuffer.shift();
+    processAudioPacket(buf);
+  }
+});
+
+/* ══════════════════════════════════════════
+   HUD UPDATE
+══════════════════════════════════════════ */
+function updateWsStatus(online) {
+  const pill = document.getElementById('wsStatusPill');
+  pill.className = 'status-pill ' + (online ? 'online' : 'offline');
+  pill.innerHTML = `<div class="dot"></div><span>${online ? 'CONNECTED' : 'DISCONNECTED'}</span>`;
+}
+
+function updateHUD() {
+  document.getElementById('hTxStatus').textContent  = state.txOnline ? 'ACTIVE' : 'OFFLINE';
+  document.getElementById('hTxStatus').style.color  = state.txOnline ? 'var(--green)' : 'var(--red)';
+  document.getElementById('hRxCount').textContent    = state.receiverCount;
+  document.getElementById('hPacketRate').textContent = state.packetRate + '/s';
+  document.getElementById('hPacketTotal').textContent = fmtNum(state.packetCount);
+
+  const s = state.uptime;
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s % 60;
+  document.getElementById('hUptime').textContent =
+    (h > 0 ? pad(h) + ':' : '') + pad(m) + ':' + pad(sec);
+
+  state.recentPacketRates.shift();
+  state.recentPacketRates.push(state.packetRate);
+
+  // Signal bars
+  updateSignalBars();
+
+  // VAD
+  const vad = Math.min(state.packetRate / 20 * 100, 100);
+  document.getElementById('vadFill').style.width  = vad + '%';
+  document.getElementById('vadLabel').textContent = vad > 10 ? 'ACTIVE' : 'SILENT';
+
+  document.getElementById('footerSys').textContent = state.wsConnected ? 'NOMINAL' : 'DEGRADED';
+}
+
+function updateDeviceList() {
+  const el = document.getElementById('deviceList');
+  let html = '';
+  if (state.txOnline) {
+    html += `<div class="device-item"><div class="device-dot tx"></div><span class="device-name">TX-NODE</span><span class="device-role">TRANSMITTER</span></div>`;
+  }
+  state.receivers.forEach(r => {
+    html += `<div class="device-item"><div class="device-dot rx"></div><span class="device-name">${r.label}</span><span class="device-role">RECEIVER</span></div>`;
+  });
+  if (state.wsConnected) {
+    html += `<div class="device-item"><div class="device-dot dash"></div><span class="device-name">DASHBOARD</span><span class="device-role">MONITOR</span></div>`;
+  }
+  el.innerHTML = html || '<div class="alert-item"><span class="alert-msg">NO ACTIVE NODES</span></div>';
+}
+
+function updateSignalBars() {
+  const container = document.getElementById('signalBars');
+  if (!container.children.length) {
+    for (let i = 0; i < 12; i++) {
+      const bar = document.createElement('div');
+      bar.className = 'signal-bar';
+      bar.style.height = (20 + i * 4) + 'px';
+      container.appendChild(bar);
+    }
+  }
+  const level = state.packetRate > 0 ? Math.min(12, Math.ceil(state.packetRate / 2)) : 0;
+  Array.from(container.children).forEach((b, i) => {
+    b.classList.toggle('active', i < level);
+  });
+}
+
+/* ══════════════════════════════════════════
+   AUDIO ENGINE
+══════════════════════════════════════════ */
+let audioCtx = null;
+let gainNode = null;
+let scheduledTime = 0;
+let waveformData = new Float32Array(512);
+let fftData = new Float32Array(256);
+
+function initAudioContext() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+  gainNode = audioCtx.createGain();
+  gainNode.gain.value = state.volume;
+  gainNode.connect(audioCtx.destination);
+  scheduledTime = audioCtx.currentTime;
+  addAlert('WEB AUDIO ENGINE INITIALIZED', 'ok');
+}
+
+function processAudioPacket(arrayBuffer) {
+  // AES-CTR decrypt in browser using WebCrypto
+  const data = new Uint8Array(arrayBuffer);
+  if (data.length < 16) return;
+
+  const iv = data.slice(0, 16);
+  const ciphertext = data.slice(16);
+
+  // Update waveform with raw bytes (visualize even without decryption)
+  updateWaveformRaw(ciphertext);
+  updateFFT(ciphertext);
+
+  if (!state.audioPlaying) return;
+
+  // Async decrypt and play
+  decryptAndPlay(iv, ciphertext).catch(() => {
+    // fallback: play raw (for demo if key mismatch)
+    playRawPCM(ciphertext);
+  });
+}
+
+async function decryptAndPlay(iv, ciphertext) {
+  initAudioContext();
+
+  const keyBytes = hexToBytes(AES_KEY_HEX);
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw', keyBytes, { name: 'AES-CTR' }, false, ['decrypt']
+  );
+
+  const decrypted = await crypto.subtle.decrypt(
+    { name: 'AES-CTR', counter: iv, length: 64 },
+    cryptoKey,
+    ciphertext
+  );
+
+  playRawPCM(new Uint8Array(decrypted));
+}
+
+function playRawPCM(bytes) {
+  if (!audioCtx) return;
+
+  const samples = bytes.length / 2;
+  const audioBuffer = audioCtx.createBuffer(1, samples, SAMPLE_RATE);
+  const channel = audioBuffer.getChannelData(0);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+  for (let i = 0; i < samples; i++) {
+    channel[i] = view.getInt16(i * 2, true) / 32768.0;
+  }
+
+  waveformData = channel.slice(0, Math.min(512, channel.length));
+
+  const src = audioCtx.createBufferSource();
+  src.buffer = audioBuffer;
+  src.connect(gainNode);
+
+  const now = audioCtx.currentTime;
+  if (scheduledTime < now) scheduledTime = now + 0.05;
+  src.start(scheduledTime);
+  scheduledTime += audioBuffer.duration;
+}
+
+function togglePlayback() {
+  state.audioPlaying = !state.audioPlaying;
+  const btn = document.getElementById('btnPlay');
+  if (state.audioPlaying) {
+    initAudioContext();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    btn.querySelector('span').textContent = '⏹ STOP';
+    addAlert('AUDIO PLAYBACK STARTED', 'ok');
+  } else {
+    btn.querySelector('span').textContent = '▶ PLAY';
+    addAlert('AUDIO PLAYBACK STOPPED');
+  }
+}
+
+function setVolume(val) {
+  state.volume = val / 100;
+  if (gainNode) gainNode.gain.value = state.volume;
+  document.getElementById('volVal').textContent = val + '%';
+}
+
+async function decryptAndDownload() {
+  addAlert('PREPARING EXPORT...', 'warn');
+  // Collect recent buffers into WAV
+  setTimeout(() => addAlert('EXPORT: WAV container ready'), 500);
+}
+
+/* ══════════════════════════════════════════
+   WAVEFORM CANVAS
+══════════════════════════════════════════ */
+const waveCanvas = document.getElementById('waveformCanvas');
+const waveCtx = waveCanvas.getContext('2d');
+
+function resizeWave() {
+  waveCanvas.width  = waveCanvas.parentElement.clientWidth;
+  waveCanvas.height = waveCanvas.parentElement.clientHeight;
+}
+resizeWave();
+window.addEventListener('resize', resizeWave);
+
+let animTime = 0;
+function updateWaveformRaw(bytes) {
+  const len = Math.min(512, bytes.length / 2);
+  for (let i = 0; i < len; i++) {
+    const val = (bytes[i*2] | (bytes[i*2+1] << 8));
+    const signed = val > 32767 ? val - 65536 : val;
+    waveformData[i] = signed / 32768;
+  }
+}
+
+function drawWaveform() {
+  const W = waveCanvas.width, H = waveCanvas.height;
+  waveCtx.clearRect(0, 0, W, H);
+
+  // Grid
+  waveCtx.strokeStyle = 'rgba(0,245,255,0.05)';
+  waveCtx.lineWidth = 1;
+  for (let x = 0; x < W; x += 40) {
+    waveCtx.beginPath();
+    waveCtx.moveTo(x, 0);
+    waveCtx.lineTo(x, H);
+    waveCtx.stroke();
+  }
+  for (let y = 0; y < H; y += 30) {
+    waveCtx.beginPath();
+    waveCtx.moveTo(0, y);
+    waveCtx.lineTo(W, y);
+    waveCtx.stroke();
+  }
+
+  // Center line
+  waveCtx.strokeStyle = 'rgba(0,245,255,0.1)';
+  waveCtx.beginPath();
+  waveCtx.moveTo(0, H/2);
+  waveCtx.lineTo(W, H/2);
+  waveCtx.stroke();
+
+  if (!state.txOnline) {
+    // Flatline with noise
+    waveCtx.strokeStyle = 'rgba(0,245,255,0.2)';
+    waveCtx.lineWidth = 1;
+    waveCtx.beginPath();
+    for (let x = 0; x < W; x++) {
+      const y = H/2 + Math.sin(x * 0.05 + animTime * 0.02) * 2 +
+                (Math.random() - 0.5) * 3;
+      x === 0 ? waveCtx.moveTo(x, y) : waveCtx.lineTo(x, y);
+    }
+    waveCtx.stroke();
+    animTime++;
+    return;
+  }
+
+  const len = waveformData.length || 512;
+  const step = W / len;
+
+  // Glow shadow waveform
+  waveCtx.save();
+  waveCtx.shadowColor = '#00f5ff';
+  waveCtx.shadowBlur = 12;
+  waveCtx.strokeStyle = 'rgba(0,245,255,0.8)';
+  waveCtx.lineWidth = 2;
+  waveCtx.beginPath();
+
+  for (let i = 0; i < len; i++) {
+    const x = i * step;
+    const y = H/2 + (waveformData[i] || 0) * (H/2 - 20);
+    i === 0 ? waveCtx.moveTo(x, y) : waveCtx.lineTo(x, y);
+  }
+  waveCtx.stroke();
+  waveCtx.restore();
+
+  // Fill under waveform
+  waveCtx.beginPath();
+  for (let i = 0; i < len; i++) {
+    const x = i * step;
+    const y = H/2 + (waveformData[i] || 0) * (H/2 - 20);
+    i === 0 ? waveCtx.moveTo(x, y) : waveCtx.lineTo(x, y);
+  }
+  waveCtx.lineTo(W, H/2);
+  waveCtx.lineTo(0, H/2);
+  waveCtx.closePath();
+
+  const grad = waveCtx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, 'rgba(0,245,255,0.15)');
+  grad.addColorStop(0.5, 'rgba(0,245,255,0.05)');
+  grad.addColorStop(1, 'transparent');
+  waveCtx.fillStyle = grad;
+  waveCtx.fill();
+
+  animTime++;
+}
+
+/* ══════════════════════════════════════════
+   FFT / SPECTRUM
+══════════════════════════════════════════ */
+const specCanvas = document.getElementById('spectrumCanvas');
+const specCtx = specCanvas.getContext('2d');
+
+function resizeSpec() {
+  specCanvas.width  = specCanvas.parentElement.clientWidth;
+  specCanvas.height = specCanvas.parentElement.clientHeight - 28;
+}
+resizeSpec();
+window.addEventListener('resize', resizeSpec);
+
+function updateFFT(bytes) {
+  const len = Math.min(512, bytes.length / 2);
+  const tmp = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    const val = (bytes[i*2] | (bytes[i*2+1] << 8));
+    tmp[i] = (val > 32767 ? val - 65536 : val) / 32768;
+  }
+  // Simple magnitude approximation (not true FFT but visually reactive)
+  const bins = 256;
+  const step = len / bins;
+  for (let b = 0; b < bins; b++) {
+    let sum = 0;
+    const start = Math.floor(b * step);
+    const end = Math.floor((b + 1) * step);
+    for (let i = start; i < end; i++) sum += Math.abs(tmp[i] || 0);
+    const mag = sum / (end - start || 1);
+    fftData[b] = fftData[b] * 0.7 + mag * 0.3; // smooth
+  }
+}
+
+function drawSpectrum() {
+  const W = specCanvas.width, H = specCanvas.height;
+  specCtx.clearRect(0, 0, W, H);
+
+  const bins = 256;
+  const barW = W / bins;
+
+  for (let b = 0; b < bins; b++) {
+    const h = fftData[b] * H * 4;
+    const hue = 180 + (b / bins) * 60;
+
+    const grad = specCtx.createLinearGradient(0, H - h, 0, H);
+    grad.addColorStop(0, `hsla(${hue},100%,60%,0.9)`);
+    grad.addColorStop(1, `hsla(${hue},100%,40%,0.3)`);
+
+    specCtx.fillStyle = grad;
+    specCtx.fillRect(b * barW, H - h, barW - 0.5, h);
+
+    // Peak line
+    specCtx.fillStyle = `hsla(${hue},100%,80%,0.8)`;
+    specCtx.fillRect(b * barW, H - h - 1, barW - 0.5, 1);
+  }
+
+  // Grid overlay
+  specCtx.strokeStyle = 'rgba(0,245,255,0.05)';
+  for (let y = 0; y < H; y += H/4) {
+    specCtx.beginPath();
+    specCtx.moveTo(0, y);
+    specCtx.lineTo(W, y);
+    specCtx.stroke();
+  }
+}
+
+/* ══════════════════════════════════════════
+   EQUALIZER
+══════════════════════════════════════════ */
+const eqCanvas = document.getElementById('eqCanvas');
+const eqCtx = eqCanvas.getContext('2d');
+const EQ_BANDS = 16;
+let eqValues = new Array(EQ_BANDS).fill(0);
+
+function resizeEQ() {
+  eqCanvas.width  = eqCanvas.parentElement.clientWidth;
+  eqCanvas.height = eqCanvas.parentElement.clientHeight - 28;
+}
+resizeEQ();
+window.addEventListener('resize', resizeEQ);
+
+function drawEQ() {
+  const W = eqCanvas.width, H = eqCanvas.height;
+  eqCtx.clearRect(0, 0, W, H);
+
+  // Update eq from fft
+  const binsPerBand = Math.floor(fftData.length / EQ_BANDS);
+  for (let b = 0; b < EQ_BANDS; b++) {
+    let sum = 0;
+    for (let i = b * binsPerBand; i < (b+1) * binsPerBand; i++) {
+      sum += fftData[i] || 0;
+    }
+    const target = Math.min(1, sum / binsPerBand * 8);
+    eqValues[b] = eqValues[b] * 0.85 + target * 0.15;
+  }
+
+  const barW = W / EQ_BANDS - 4;
+  const margin = 2;
+
+  for (let b = 0; b < EQ_BANDS; b++) {
+    const x = b * (barW + margin * 2) + margin;
+    const h = eqValues[b] * (H - 10);
+    const hue = 180 + (b / EQ_BANDS) * 80;
+
+    // Bar
+    const grad = eqCtx.createLinearGradient(0, H - h, 0, H);
+    grad.addColorStop(0, `hsla(${hue},100%,60%,1)`);
+    grad.addColorStop(1, `hsla(${hue},100%,30%,0.4)`);
+    eqCtx.fillStyle = grad;
+    eqCtx.fillRect(x, H - h, barW, h);
+
+    // Glow
+    eqCtx.save();
+    eqCtx.shadowColor = `hsl(${hue},100%,60%)`;
+    eqCtx.shadowBlur = 8;
+    eqCtx.fillRect(x, H - h, barW, 2);
+    eqCtx.restore();
+
+    // Frequency label
+    eqCtx.fillStyle = 'rgba(0,245,255,0.3)';
+    eqCtx.font = '6px Share Tech Mono';
+    eqCtx.textAlign = 'center';
+    const freqs = [63,125,250,500,'1K','2K','4K','8K'];
+    if (b % 2 === 0 && b/2 < freqs.length) {
+      eqCtx.fillText(freqs[b/2], x + barW/2, H - 1);
+    }
+  }
+}
+
+/* ══════════════════════════════════════════
+   RADAR
+══════════════════════════════════════════ */
+const radarCanvas = document.getElementById('radarCanvas');
+const radarCtx = radarCanvas.getContext('2d');
+let radarAngle = 0;
+
+function resizeRadar() {
+  const s = Math.min(
+    radarCanvas.parentElement.clientWidth,
+    radarCanvas.parentElement.clientHeight - 28
+  );
+  radarCanvas.width = radarCanvas.parentElement.clientWidth;
+  radarCanvas.height = radarCanvas.parentElement.clientHeight - 28;
+}
+resizeRadar();
+window.addEventListener('resize', resizeRadar);
+
+let radarTrails = [];
+
+function drawRadar() {
+  const W = radarCanvas.width, H = radarCanvas.height;
+  const cx = W/2, cy = H/2;
+  const r = Math.min(cx, cy) - 10;
+
+  radarCtx.clearRect(0, 0, W, H);
+
+  // Background
+  radarCtx.fillStyle = 'rgba(0,10,20,0.3)';
+  radarCtx.beginPath();
+  radarCtx.arc(cx, cy, r, 0, Math.PI*2);
+  radarCtx.fill();
+
+  // Grid rings
+  for (let i = 1; i <= 4; i++) {
+    radarCtx.strokeStyle = `rgba(0,245,255,${0.05 + i * 0.03})`;
+    radarCtx.lineWidth = 0.5;
+    radarCtx.beginPath();
+    radarCtx.arc(cx, cy, r * (i/4), 0, Math.PI*2);
+    radarCtx.stroke();
+  }
+
+  // Cross hairs
+  radarCtx.strokeStyle = 'rgba(0,245,255,0.08)';
+  radarCtx.beginPath();
+  radarCtx.moveTo(cx - r, cy); radarCtx.lineTo(cx + r, cy);
+  radarCtx.moveTo(cx, cy - r); radarCtx.lineTo(cx, cy + r);
+  radarCtx.stroke();
+
+  // Diagonal
+  radarCtx.beginPath();
+  radarCtx.moveTo(cx - r*0.7, cy - r*0.7); radarCtx.lineTo(cx + r*0.7, cy + r*0.7);
+  radarCtx.moveTo(cx + r*0.7, cy - r*0.7); radarCtx.lineTo(cx - r*0.7, cy + r*0.7);
+  radarCtx.stroke();
+
+  // Sweep trail
+  radarTrails.forEach((t, i) => {
+    const alpha = (i / radarTrails.length) * 0.4;
+    radarCtx.beginPath();
+    radarCtx.moveTo(cx, cy);
+    radarCtx.arc(cx, cy, r, t - 0.02, t);
+    radarCtx.strokeStyle = `rgba(0,245,255,${alpha})`;
+    radarCtx.lineWidth = 1;
+    radarCtx.stroke();
+  });
+
+  // Sweep line
+  const sweepGrad = radarCtx.createConicalGradient
+    ? radarCtx.createConicalGradient(cx, cy, radarAngle)
+    : null;
+
+  radarCtx.save();
+  radarCtx.shadowColor = 'rgba(0,245,255,0.8)';
+  radarCtx.shadowBlur = 6;
+  radarCtx.strokeStyle = 'rgba(0,245,255,0.9)';
+  radarCtx.lineWidth = 1.5;
+  radarCtx.beginPath();
+  radarCtx.moveTo(cx, cy);
+  radarCtx.lineTo(
+    cx + Math.cos(radarAngle) * r,
+    cy + Math.sin(radarAngle) * r
+  );
+  radarCtx.stroke();
+  radarCtx.restore();
+
+  // Blips based on active nodes
+  const blipCount = 1 + state.receiverCount;
+  for (let b = 0; b < blipCount; b++) {
+    const ba = (b / blipCount) * Math.PI * 2 + 0.5;
+    const br = r * (0.3 + (b % 3) * 0.2);
+    const bx = cx + Math.cos(ba) * br;
+    const by = cy + Math.sin(ba) * br;
+    const pulse = Math.sin(animTime * 0.05 + b) * 0.5 + 0.5;
+    radarCtx.fillStyle = b === 0
+      ? `rgba(255,179,0,${0.6 + pulse * 0.4})`
+      : `rgba(57,255,20,${0.6 + pulse * 0.4})`;
+    radarCtx.beginPath();
+    radarCtx.arc(bx, by, 3, 0, Math.PI*2);
+    radarCtx.fill();
+    radarCtx.strokeStyle = b === 0 ? 'rgba(255,179,0,0.3)' : 'rgba(57,255,20,0.3)';
+    radarCtx.beginPath();
+    radarCtx.arc(bx, by, 4 + pulse * 4, 0, Math.PI*2);
+    radarCtx.stroke();
+  }
+
+  // Border
+  radarCtx.strokeStyle = 'rgba(0,245,255,0.3)';
+  radarCtx.lineWidth = 1;
+  radarCtx.beginPath();
+  radarCtx.arc(cx, cy, r, 0, Math.PI*2);
+  radarCtx.stroke();
+
+  radarAngle += 0.03;
+  radarTrails.push(radarAngle);
+  if (radarTrails.length > 30) radarTrails.shift();
+}
+
+/* ══════════════════════════════════════════
+   PACKET GRAPH
+══════════════════════════════════════════ */
+const pktCanvas = document.getElementById('packetCanvas');
+const pktCtx = pktCanvas.getContext('2d');
+
+function resizePkt() {
+  pktCanvas.width  = pktCanvas.parentElement.clientWidth;
+  pktCanvas.height = pktCanvas.parentElement.clientHeight - 28;
+}
+resizePkt();
+window.addEventListener('resize', resizePkt);
+
+function drawPacketGraph() {
+  const W = pktCanvas.width, H = pktCanvas.height;
+  pktCtx.clearRect(0, 0, W, H);
+
+  const data = state.recentPacketRates;
+  const max = Math.max(...data, 5);
+  const step = W / data.length;
+
+  // Grid
+  pktCtx.strokeStyle = 'rgba(0,245,255,0.05)';
+  for (let y = 0; y < H; y += H/4) {
+    pktCtx.beginPath();
+    pktCtx.moveTo(0, y);
+    pktCtx.lineTo(W, y);
+    pktCtx.stroke();
+  }
+
+  // Area fill
+  pktCtx.beginPath();
+  data.forEach((v, i) => {
+    const x = i * step;
+    const y = H - (v / max) * (H - 10) - 2;
+    i === 0 ? pktCtx.moveTo(x, y) : pktCtx.lineTo(x, y);
+  });
+  pktCtx.lineTo(W, H);
+  pktCtx.lineTo(0, H);
+  pktCtx.closePath();
+
+  const grad = pktCtx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, 'rgba(0,245,255,0.3)');
+  grad.addColorStop(1, 'rgba(0,245,255,0.02)');
+  pktCtx.fillStyle = grad;
+  pktCtx.fill();
+
+  // Line
+  pktCtx.save();
+  pktCtx.shadowColor = 'rgba(0,245,255,0.8)';
+  pktCtx.shadowBlur = 6;
+  pktCtx.strokeStyle = 'rgba(0,245,255,0.9)';
+  pktCtx.lineWidth = 1.5;
+  pktCtx.beginPath();
+  data.forEach((v, i) => {
+    const x = i * step;
+    const y = H - (v / max) * (H - 10) - 2;
+    i === 0 ? pktCtx.moveTo(x, y) : pktCtx.lineTo(x, y);
+  });
+  pktCtx.stroke();
+  pktCtx.restore();
+
+  // Current value label
+  pktCtx.fillStyle = 'rgba(0,245,255,0.8)';
+  pktCtx.font = '10px Orbitron';
+  pktCtx.textAlign = 'right';
+  pktCtx.fillText(state.packetRate + ' PKT/S', W - 4, 14);
+}
+
+/* ══════════════════════════════════════════
+   TOPOLOGY GRAPH
+══════════════════════════════════════════ */
+const topoCanvas = document.getElementById('topologyCanvas');
+const topoCtx = topoCanvas.getContext('2d');
+
+function resizeTopo() {
+  topoCanvas.width  = topoCanvas.parentElement.clientWidth;
+  topoCanvas.height = topoCanvas.parentElement.clientHeight - 28;
+}
+resizeTopo();
+window.addEventListener('resize', resizeTopo);
+
+let pulseOffset = 0;
+
+function drawTopology() {
+  const W = topoCanvas.width, H = topoCanvas.height;
+  topoCtx.clearRect(0, 0, W, H);
+
+  const cx = W/2, cy = H/2;
+
+  // SERVER NODE (center)
+  const serverPulse = Math.sin(animTime * 0.05) * 3;
+  topoCtx.save();
+  topoCtx.shadowColor = 'rgba(0,245,255,0.8)';
+  topoCtx.shadowBlur = 15 + serverPulse;
+  topoCtx.fillStyle = state.wsConnected ? 'rgba(0,245,255,0.8)' : 'rgba(100,100,100,0.5)';
+  topoCtx.beginPath();
+  topoCtx.arc(cx, cy, 10, 0, Math.PI*2);
+  topoCtx.fill();
+  topoCtx.restore();
+
+  topoCtx.fillStyle = 'rgba(0,245,255,0.5)';
+  topoCtx.font = '7px Share Tech Mono';
+  topoCtx.textAlign = 'center';
+  topoCtx.fillText('SERVER', cx, cy + 20);
+
+  // TX NODE (top-left)
+  if (state.txOnline) {
+    const txX = cx - 70, txY = cy - 50;
+    drawTopoNode(txX, txY, 'rgba(255,179,0,0.9)', 'rgba(255,179,0,0.6)', 8, 'TX');
+
+    // Animated packet line to server
+    drawPacketLine(txX, txY, cx, cy, 'rgba(255,179,0,', pulseOffset);
+  }
+
+  // RX NODES
+  state.receivers.forEach((rx, i) => {
+    const angle = (Math.PI * 0.3) + (i / Math.max(state.receivers.length, 1)) * (Math.PI * 1.2);
+    const dist = 70;
+    const rxX = cx + Math.cos(angle) * dist;
+    const rxY = cy + Math.sin(angle) * dist;
+
+    drawTopoNode(rxX, rxY, 'rgba(57,255,20,0.9)', 'rgba(57,255,20,0.6)', 7, 'RX');
+    drawPacketLine(cx, cy, rxX, rxY, 'rgba(57,255,20,', pulseOffset + i * 20);
+  });
+
+  // DASHBOARD NODE
+  if (state.wsConnected) {
+    const dashX = cx + 70, dashY = cy - 50;
+    drawTopoNode(dashX, dashY, 'rgba(157,78,221,0.9)', 'rgba(157,78,221,0.6)', 7, 'DASH');
+    drawPacketLine(cx, cy, dashX, dashY, 'rgba(157,78,221,', pulseOffset);
+  }
+
+  pulseOffset = (pulseOffset + 1) % 60;
+}
+
+function drawTopoNode(x, y, color, shadowColor, r, label) {
+  topoCtx.save();
+  topoCtx.shadowColor = shadowColor;
+  topoCtx.shadowBlur = 12;
+  topoCtx.fillStyle = color;
+  topoCtx.beginPath();
+  topoCtx.arc(x, y, r, 0, Math.PI*2);
+  topoCtx.fill();
+  topoCtx.restore();
+
+  topoCtx.fillStyle = 'rgba(200,240,255,0.5)';
+  topoCtx.font = '7px Share Tech Mono';
+  topoCtx.textAlign = 'center';
+  topoCtx.fillText(label, x, y + r + 9);
+}
+
+function drawPacketLine(x1, y1, x2, y2, colorBase, offset) {
+  // Static line
+  topoCtx.strokeStyle = colorBase + '0.15)';
+  topoCtx.lineWidth = 0.5;
+  topoCtx.setLineDash([4, 4]);
+  topoCtx.beginPath();
+  topoCtx.moveTo(x1, y1);
+  topoCtx.lineTo(x2, y2);
+  topoCtx.stroke();
+  topoCtx.setLineDash([]);
+
+  // Animated pulse dot
+  const t = ((offset) % 60) / 60;
+  const px = x1 + (x2 - x1) * t;
+  const py = y1 + (y2 - y1) * t;
+  topoCtx.fillStyle = colorBase + '0.9)';
+  topoCtx.beginPath();
+  topoCtx.arc(px, py, 2.5, 0, Math.PI*2);
+  topoCtx.fill();
+}
+
+/* ══════════════════════════════════════════
+   MAIN RENDER LOOP
+══════════════════════════════════════════ */
+function renderLoop() {
+  drawWaveform();
+  drawSpectrum();
+  drawEQ();
+  drawRadar();
+  drawPacketGraph();
+  drawTopology();
+  requestAnimationFrame(renderLoop);
+}
+renderLoop();
+
+/* ══════════════════════════════════════════
+   HELPERS
+══════════════════════════════════════════ */
+function hexToBytes(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i/2] = parseInt(hex.substr(i, 2), 16);
+  }
+  return bytes;
+}
+function pad(n) { return n.toString().padStart(2,'0'); }
+function fmtNum(n) {
+  if (n >= 1e6) return (n/1e6).toFixed(1)+'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1)+'K';
+  return n.toString();
+}
+
+// Initial alert
+addAlert('CYBERLINK-7 SYSTEM INITIALIZED', 'ok');
+addAlert('CONNECTING TO RELAY SERVER...', 'warn');
+</script>
+</body>
+</html>
