@@ -844,21 +844,33 @@ socket.on('packet_meta', (meta) => {
     '·' + Math.random().toString(16).slice(2,10).toUpperCase();
 });
 
-let lastPacketTime = 0;
+let lastPacketTime  = 0;
+let packetThrottle  = 0;
+const PROCESS_EVERY = 2; // visualize 1 in 2 packets — halves CPU load
+
 socket.on('audio_packet', (packet) => {
   const now = performance.now();
-  state.latency = now - lastPacketTime;
+  state.latency  = now - lastPacketTime;
   lastPacketTime = now;
   document.getElementById('footerLatency').textContent =
     Math.round(state.latency) + 'ms';
 
-  // Push to audio buffer
+  packetThrottle++;
+
   const buf = packet instanceof ArrayBuffer ? packet :
     (packet.buffer ? packet.buffer : null);
-  if (buf) {
-    state.audioBuffer.push(new Uint8Array(buf));
-    if (state.audioBuffer.length > 50) state.audioBuffer.shift();
-    processAudioPacket(buf);
+  if (!buf) return;
+
+  // Always play audio if enabled
+  if (state.audioPlaying) processAudioPacket(buf);
+
+  // Only update visualizations every Nth packet — saves CPU
+  if (packetThrottle % PROCESS_EVERY === 0) {
+    const data = new Uint8Array(buf);
+    if (data.length > 16) {
+      updateWaveformRaw(data.slice(16));
+      updateFFT(data.slice(16));
+    }
   }
 });
 
@@ -1562,16 +1574,43 @@ function drawPacketLine(x1, y1, x2, y2, colorBase, offset) {
 /* ══════════════════════════════════════════
    MAIN RENDER LOOP
 ══════════════════════════════════════════ */
-function renderLoop() {
-  drawWaveform();
-  drawSpectrum();
-  drawEQ();
-  drawRadar();
-  drawPacketGraph();
-  drawTopology();
+// Throttled render loop — max 30fps to reduce CPU/GPU load
+let lastFrameTime = 0;
+const TARGET_FPS  = 30;
+const FRAME_MS    = 1000 / TARGET_FPS;
+
+// Frame counters for staggered rendering
+// Heavy canvases render every other frame
+let frameCount = 0;
+
+function renderLoop(timestamp) {
   requestAnimationFrame(renderLoop);
+
+  const elapsed = timestamp - lastFrameTime;
+  if (elapsed < FRAME_MS) return; // skip frame — maintain 30fps cap
+  lastFrameTime = timestamp - (elapsed % FRAME_MS);
+
+  frameCount++;
+
+  // Waveform — every frame (most important visual)
+  drawWaveform();
+
+  // Spectrum — every frame
+  drawSpectrum();
+
+  // EQ — every 2nd frame
+  if (frameCount % 2 === 0) drawEQ();
+
+  // Radar — every 2nd frame
+  if (frameCount % 2 === 1) drawRadar();
+
+  // Packet graph — every 4th frame (slow data)
+  if (frameCount % 4 === 0) drawPacketGraph();
+
+  // Topology — every 4th frame (slow data)
+  if (frameCount % 4 === 2) drawTopology();
 }
-renderLoop();
+requestAnimationFrame(renderLoop);
 
 /* ══════════════════════════════════════════
    HELPERS
