@@ -13,17 +13,16 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../dashboard')));
 
+// ── State ─────────────────────────────────
 const state = {
   transmitter : null,
   receivers   : new Map(),
   dashboards  : new Set(),
   packetCount : 0,
   packetTimes : [],
-  startTime   : Date.now(),
-  dropped     : 0
+  startTime   : Date.now()
 };
 
-// ── Packet rate ───────────────────────────
 function packetRate() {
   const now = Date.now();
   state.packetTimes = state.packetTimes.filter(t => now - t < 1000);
@@ -38,173 +37,190 @@ function statusPayload() {
     packetCount       : state.packetCount,
     packetRate        : packetRate(),
     uptime            : Math.floor((Date.now() - state.startTime) / 1000),
-    dropped           : state.dropped,
     receivers         : Array.from(state.receivers.values())
   };
 }
 
 // ══════════════════════════════════════════
-//  RAW WEBSOCKET — ESP32 at /ws
+//  RAW WEBSOCKET — ESP32 connects at /ws
 // ══════════════════════════════════════════
-const wss = new WebSocketServer({ server, path: '/ws' });
+const wss = new WebSocketServer({
+  server,
+  path              : '/ws',
+  maxPayload        : 128 * 1024,  // 128KB max packet
+  perMessageDeflate : false         // disable compression — lower CPU
+});
 
-// Only forward every Nth audio packet to dashboard
-// Reduces memory pressure massively
-const DASHBOARD_PACKET_RATIO = 4; // send 1 in 4 packets to dashboard
-let   dashPacketCounter = 0;
+// Dashboard gets 1 in 6 packets — reduce memory pressure
+let dashCounter = 0;
 
 wss.on('connection', (ws, req) => {
-  console.log('[RAW WS] Connected: ' + req.socket.remoteAddress);
+  const ip = req.socket.remoteAddress;
+  console.log(`[WS] Connected: ${ip}`);
+
   let role = null, deviceId = null;
 
-  ws.send(JSON.stringify({ event: 'connected', data: { msg: 'CYBERLINK-7 ready' } }));
+  // Welcome message
+  ws.send(JSON.stringify({ event: 'connected', data: { msg: 'CyberWalkie ready' } }));
 
   ws.on('message', (data, isBinary) => {
 
-    // ── Registration (text) ───────────────
+    // ── Text = registration ───────────────
     if (!isBinary) {
       try {
         let p = JSON.parse(data.toString());
         if (p.event === 'register') p = p.data;
         role     = p.role;
-        deviceId = p.deviceId || p.label || 'unknown';
+        deviceId = p.deviceId || p.label || ip;
 
         if (role === 'transmitter') {
           state.transmitter = ws;
-          console.log('[TX] Registered: ' + deviceId);
+          console.log(`[TX] Online: ${deviceId}`);
           ws.send(JSON.stringify({ event: 'registered', data: { role: 'transmitter' } }));
+
         } else if (role === 'receiver') {
           state.receivers.set(ws, {
             id: deviceId, label: p.label || deviceId, connectedAt: Date.now()
           });
-          console.log('[RX] Registered: ' + deviceId);
+          console.log(`[RX] Online: ${deviceId}`);
           ws.send(JSON.stringify({ event: 'registered', data: { role: 'receiver' } }));
         }
+
         broadcastStatus();
-      } catch(e) {}
+      } catch(e) {
+        // Ignore malformed JSON
+      }
       return;
     }
 
-    // ── Audio packet (binary) ─────────────
+    // ── Binary = raw PCM audio from TX ────
     if (role !== 'transmitter') return;
 
     state.packetCount++;
     state.packetTimes.push(Date.now());
 
-    // Forward to ESP32 receivers — always, full rate
+    // ── Forward to all ESP32 receivers ────
+    // Full rate — receivers need every packet for smooth audio
     state.receivers.forEach((info, rxWs) => {
-      if (rxWs.readyState === 1) {
-        rxWs.send(data, { binary: true });
+      if (rxWs.readyState === 1) {  // OPEN
+        try {
+          rxWs.send(data, { binary: true });
+        } catch(e) {
+          console.error('[RX] Send error:', e.message);
+        }
       }
     });
 
-    // Forward to dashboard — throttled to reduce memory
-    dashPacketCounter++;
-    if (dashPacketCounter % DASHBOARD_PACKET_RATIO === 0) {
-
-      // Only send if dashboard socket buffer is not backed up
-      const dashSockets = io.sockets.adapter.rooms.get('dashboards');
-      if (dashSockets && dashSockets.size > 0) {
-        // Use volatile emit — drops packet if not delivered immediately
-        // This prevents memory buildup when dashboard is slow
+    // ── Forward to dashboard ──────────────
+    // Throttled — dashboard only needs subset for visualization
+    dashCounter++;
+    if (dashCounter % 6 === 0) {
+      try {
         io.volatile.to('dashboards').emit('audio_packet', data);
-        io.to('dashboards').emit('packet_meta', {
-          seq  : state.packetCount,
-          ts   : Date.now(),
-          size : data.length,
-          rate : packetRate()
-        });
-      }
-    } else {
-      state.dropped++;
+      } catch(e) {}
+    }
+
+    // Send metadata to dashboard every packet
+    if (dashCounter % 6 === 0) {
+      io.volatile.to('dashboards').emit('packet_meta', {
+        seq  : state.packetCount,
+        ts   : Date.now(),
+        size : Buffer.isBuffer(data) ? data.length : data.byteLength,
+        rate : packetRate()
+      });
     }
   });
 
-  ws.on('close', () => {
-    console.log('[RAW WS] Disconnected: ' + (deviceId || 'unknown'));
+  ws.on('close', (code, reason) => {
+    console.log(`[WS] Closed: ${deviceId || 'unregistered'} (code: ${code})`);
     if (ws === state.transmitter) {
       state.transmitter = null;
+      console.log('[TX] Transmitter offline');
       io.emit('transmitter_offline');
     }
     state.receivers.delete(ws);
     broadcastStatus();
   });
 
-  ws.on('error', err => console.error('[RAW WS] Error: ' + err.message));
+  ws.on('error', err => {
+    console.error(`[WS] Error (${deviceId}): ${err.message}`);
+  });
 
-  // Ping every 25s to keep Render alive
-  const ping = setInterval(() => { if (ws.readyState === 1) ws.ping(); }, 25000);
-  ws.on('close', () => clearInterval(ping));
+  // Ping every 20s — keep Render connection alive
+  const keepAlive = setInterval(() => {
+    if (ws.readyState === 1) ws.ping();
+    else clearInterval(keepAlive);
+  }, 20000);
+
+  ws.on('close', () => clearInterval(keepAlive));
 });
 
 // ══════════════════════════════════════════
 //  SOCKET.IO — Browser dashboard
 // ══════════════════════════════════════════
 const io = new Server(server, {
-  cors              : { origin: '*' },
-  maxHttpBufferSize : 256 * 1024,   // 256KB max — was 1MB, reduce memory
-  pingTimeout       : 10000,
-  pingInterval      : 25000,
-  // Limit backpressure — disconnect slow clients
-  connectTimeout    : 5000
+  cors             : { origin: '*' },
+  maxHttpBufferSize: 128 * 1024,  // 128KB
+  pingTimeout      : 10000,
+  pingInterval     : 20000
 });
 
 function broadcastStatus() {
   io.volatile.to('dashboards').emit('server_status', statusPayload());
 }
+
 setInterval(broadcastStatus, 1000);
 
 io.on('connection', (socket) => {
-  console.log('[SOCKET.IO] Connected: ' + socket.id);
+  console.log(`[DASH] Connected: ${socket.id}`);
 
   socket.on('register', (data) => {
-    if (data.role === 'dashboard') {
+    if (data && data.role === 'dashboard') {
       state.dashboards.add(socket.id);
       socket.join('dashboards');
       socket.emit('registered', { role: 'dashboard', sessionId: socket.id });
-      console.log('[DASH] Registered: ' + socket.id);
       broadcastStatus();
     }
   });
 
   socket.on('disconnect', () => {
     state.dashboards.delete(socket.id);
-    console.log('[SOCKET.IO] Disconnected: ' + socket.id);
+    console.log(`[DASH] Disconnected: ${socket.id}`);
     broadcastStatus();
   });
 });
 
 // ══════════════════════════════════════════
-//  REST
+//  REST ENDPOINTS
 // ══════════════════════════════════════════
-app.get('/health',     (req, res) => res.send('OK'));
+app.get('/health', (req, res) => res.send('OK'));
+
 app.get('/api/status', (req, res) => res.json(statusPayload()));
-app.get('/',           (req, res) =>
+
+app.get('/', (req, res) =>
   res.sendFile(path.join(__dirname, '../dashboard/index.html')));
 
 // ══════════════════════════════════════════
-//  MEMORY WATCHDOG
-//  Log memory every 30s — warn if high
+//  MEMORY LOG every 60s
 // ══════════════════════════════════════════
 setInterval(() => {
-  const mem = process.memoryUsage();
-  const mb  = Math.round(mem.rss / 1024 / 1024);
-  if (mb > 80) {
-    console.warn(`[MEM] WARNING: ${mb}MB used — high memory`);
-  } else {
-    console.log(`[MEM] ${mb}MB | Pkts: ${state.packetCount} | Dropped: ${state.dropped}`);
-  }
-}, 30000);
+  const mb = Math.round(process.memoryUsage().rss / 1024 / 1024);
+  const rx = state.receivers.size;
+  const pr = packetRate();
+  console.log(`[SYS] Mem:${mb}MB | TX:${!!state.transmitter} | RX:${rx} | Rate:${pr}pkt/s`);
+}, 60000);
 
 // ══════════════════════════════════════════
 //  START
 // ══════════════════════════════════════════
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log('\n╔══════════════════════════════════════╗');
-  console.log('║  CYBERLINK-7 Relay Server             ║');
-  console.log('║  Port     : ' + PORT + '                      ║');
-  console.log('║  ESP32 WS : ws://host/ws              ║');
-  console.log('║  Dashboard: http://host/              ║');
-  console.log('╚══════════════════════════════════════╝\n');
+  console.log('');
+  console.log('╔══════════════════════════════════════╗');
+  console.log('║  CyberWalkie Relay Server             ║');
+  console.log(`║  Port     : ${PORT}                      ║`);
+  console.log('║  ESP32 WS : /ws                       ║');
+  console.log('║  Dashboard: /                         ║');
+  console.log('╚══════════════════════════════════════╝');
+  console.log('');
 });
